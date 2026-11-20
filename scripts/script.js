@@ -110,6 +110,8 @@ async function mainMechanics(endpoint) {
   } catch (err) {
     if (err.message === 'not-found') {
       showError(videoContainer, videoNotFoundTmp, 'Нет подходящих видео =(');
+    } else if (err.message === 'video-load' || err.message === 'video-timeout') {
+      showError(videoContainer, videoNotFoundTmp, 'Видео не загрузилось. Повторите поиск.');
     } else {
       showError(videoContainer, videoNotFoundTmp, 'Ошибка получения данных :(');
     }
@@ -129,11 +131,32 @@ async function delay(ms) {
   });
 }
 
-// Промис, который резолвится, если видео целиком готово к проинрыванию без пауз
+// Дожидаемся первого кадра; ошибки и таймаут завершают ожидание.
+function waitForReadyVideo(video) {
+  return new Promise((resolve, reject) => {
+    const cleanup = () => {
+      clearTimeout(timeoutId);
+      video.removeEventListener('loadeddata', onReady);
+      video.removeEventListener('error', onError);
+    };
+    const onReady = () => {
+      cleanup();
+      resolve();
+    };
+    const onError = () => {
+      cleanup();
+      reject(new Error('video-load'));
+    };
+    const timeoutId = setTimeout(() => {
+      cleanup();
+      reject(new Error('video-timeout'));
+    }, 15000);
 
-async function waitForReadyVideo(video) {
-  return await new Promise((resolve) => {
-    video.oncanplaythrough = resolve;
+    video.addEventListener('loadeddata', onReady);
+    video.addEventListener('error', onError);
+    if (video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA) {
+      onReady();
+    }
   });
 }
 
@@ -177,6 +200,8 @@ function appendCards({ baseUrl, dataArray, cardTmp, container }) {
 function setVideo({ baseUrl, video, videoUrl, posterUrl }) {
   video.setAttribute('src', `${baseUrl}${videoUrl}`);
   video.setAttribute('poster', `${baseUrl}${posterUrl}`);
+  video.preload = 'auto';
+  video.load();
   console.log('Подставил видео в основной блок');
 }
 
@@ -227,20 +252,27 @@ function chooseCurrentVideo({
           item.classList.remove(currentLinkClassName);
         });
         item.classList.add(currentLinkClassName);
+        videoContainer.querySelector('.error')?.remove();
         showPreloader(preloaderTmp, videoContainer);
-        const vidoObj = videoData.find(
-          (video) => String(video.id) === String(item.id)
-        );
-        setVideo({
-          baseUrl,
-          video: mainVideo,
-          videoUrl: vidoObj.video.url,
-          posterUrl: vidoObj.poster.url,
-        });
-        await waitForReadyVideo(mainVideo);
-        await delay(preloaderWaitindTime);
-        removePreloader(videoContainer, '.preloader');
-        console.log('Переключил видео');
+        try {
+          const vidoObj = videoData.find(
+            (video) => String(video.id) === String(item.id)
+          );
+          setVideo({
+            baseUrl,
+            video: mainVideo,
+            videoUrl: vidoObj.video.url,
+            posterUrl: vidoObj.poster.url,
+          });
+          await waitForReadyVideo(mainVideo);
+          await delay(preloaderWaitindTime);
+          console.log('Переключил видео');
+        } catch (err) {
+          showError(videoContainer, videoNotFoundTmp, 'Видео не загрузилось. Выберите другое.');
+          console.log(err);
+        } finally {
+          removePreloader(videoContainer, '.preloader');
+        }
       };
     });
   }
